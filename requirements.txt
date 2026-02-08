@@ -1,0 +1,19 @@
+# candidates calibrator – install: pip install -r requirements.txt
+#
+# functional:
+# - system uses Gemini API to score candidates:
+#   1. get candidates from config/candidates.json
+#   2. get config/interviews-scorecards.json
+#   3. for each candidate with score=-1, score using transcript + scorecard
+#
+# non-functional: google ADK, Gemini API, node.js for server (future)
+
+google-genai>=1.0.0
+google-adk>=1.0.0
+google-api-python-client>=2.100.0
+google-auth>=2.25.0
+google-auth-oauthlib>=1.2.0
+python-dotenv>=1.0.0
+docx2txt>=0.9
+python-docx>=1.0.0
+requests>=2.31.0

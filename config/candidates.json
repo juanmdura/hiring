@@ -1,0 +1,22 @@
+{
+  "candidates": [
+    {
+      "name": "Bruno Membrado",
+      "email": "brunomembrado10@gmail.com",
+      "transcript": "https://docs.google.com/document/d/1wXz6EwomGv40Hw_nXdJYNO6KufbZwktWGB_KXbAzjF8/edit?usp=drive_link",
+      "linkedin": "https://www.linkedin.com/in/bruno-membrado-0a7a1521b/",
+      "position": "BACKEND ENGINEER",
+      "score": 8,
+      "score_reasoning": "Bruno demonstrates a strong grasp of technical concepts relevant to the role, particularly in JavaScript, Node.js concurrency, and React reconciliation. His soft skills are exceptional, showcasing high adaptability, resilience, and a proactive problem-solving mindset, especially in resource-constrained environments. He exhibits a strong passion for continuous learning and a clear ambition to take on leadership responsibilities, making him a valuable asset."
+    },
+    {
+      "name": "Ronald Fabricio Centeno Cárdenas",
+      "email": "fabriciocendecar@gmail.com",
+      "transcript": "https://docs.google.com/document/d/1wXz6EwomGv40Hw_nXdJYNO6KufbZwktWGB_KXbAzjF8/edit?usp=drive_link",
+      "linkedin": "https://www.linkedin.com/in/r-fabricio/",
+      "position": "BACKEND ENGINEER",
+      "score": 9,
+      "score_reasoning": "The candidate demonstrates strong technical depth in API design, testing methodologies, and systematic debugging. Their responses are clear, concise, and highlight good practices in each area, such as using FastAPI, differentiating test types, and employing logging and caching for production issues. This indicates solid experience and a pragmatic approach to backend engineering challenges."
+    }
+  ]
+}
