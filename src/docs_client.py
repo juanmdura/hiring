@@ -12,6 +12,9 @@ log = logging.getLogger(__name__)
 # Project root = parent of src/
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = PROJECT_ROOT / "config"
+
+# Last OAuth/Docs error (so callers can show it when fetch returns None)
+_last_error: str | None = None
 DEFAULT_CREDENTIALS_PATH = CONFIG_DIR / "service_account.json"
 
 # Load config/.env when this module is imported (e.g. from pytest or agent)
@@ -73,6 +76,7 @@ def _get_creds():
 
 def _get_creds_oauth():
     """Build credentials from OAuth: access token (option 3) or refresh token."""
+    global _last_error
     client_id = os.getenv("GOOGLE_CLIENT_ID")
     client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
     if not client_id or not client_secret:
@@ -90,7 +94,8 @@ def _get_creds_oauth():
                 if expiry.tzinfo is None:
                     expiry = expiry.replace(tzinfo=timezone.utc)
                 if expiry <= datetime.now(timezone.utc):
-                    log.debug("GOOGLE_ACCESS_TOKEN expired; run python run/oauth_login.py again")
+                    _last_error = "GOOGLE_ACCESS_TOKEN expired; run python run/oauth_login.py again."
+                    log.debug("%s", _last_error)
                     return None
             except Exception:
                 pass
@@ -104,6 +109,7 @@ def _get_creds_oauth():
                 scopes=SCOPES,
             )
         except Exception as e:
+            _last_error = f"OAuth access token failed: {e}"
             log.debug("OAuth access token failed: %s", e)
             return None
 
@@ -124,7 +130,8 @@ def _get_creds_oauth():
         creds.refresh(Request())
         return creds
     except Exception as e:
-        log.debug("OAuth credentials failed: %s", e)
+        _last_error = f"OAuth refresh failed: {e}"
+        log.warning("OAuth credentials failed: %s", e)
         return None
 
 
@@ -185,10 +192,14 @@ def get_doc_id_from_folder_by_name(folder_id: str, name_contains: str) -> str | 
 def upload_file_to_drive(folder_id: str, filename: str, content: str, mime_type: str = "text/plain") -> str | None:
     """
     Upload a text file to a Google Drive folder. Returns the new file id or None on failure.
-    Requires drive.file scope (OAuth: re-run oauth_login.py if you added this scope later).
+    Requires drive.file scope — run python run/oauth_login.py to get a token with that scope.
     """
+    import sys
     creds = _get_creds()
     if creds is None:
+        err = "Drive upload skipped: no credentials (set GOOGLE_ACCESS_TOKEN or GOOGLE_REFRESH_TOKEN in config/.env)"
+        log.error(err)
+        print(f"[Drive] {err}", file=sys.stderr)
         return None
     try:
         import io
@@ -208,16 +219,28 @@ def upload_file_to_drive(folder_id: str, filename: str, content: str, mime_type:
         ).execute()
         return created.get("id")
     except Exception as e:
-        log.warning("Drive upload failed (folder_id=%s): %s", folder_id, e)
-        return None
+        err = f"Drive upload failed (folder_id={folder_id}): {e}"
+        log.exception(err)
+        print(f"[Drive] {err}", file=sys.stderr)
+        raise
+
+
+def get_last_error() -> str | None:
+    """Return the last OAuth or Docs API error message, or None."""
+    global _last_error
+    out = _last_error
+    _last_error = None
+    return out
 
 
 def get_document_text(doc_id: str, credentials_path: str | Path | None = None) -> str | None:
     """
     Fetch a Google Doc's body text using the Docs API.
     Tries: 1) Service account JSON  2) OAuth (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN).
-    Returns None if credentials are missing or the doc is inaccessible.
+    Returns None if credentials are missing or the doc is inaccessible. Use get_last_error() for the reason.
     """
+    global _last_error
+    _last_error = None
     if credentials_path is not None:
         path = Path(credentials_path)
         if path.exists():
@@ -231,13 +254,15 @@ def get_document_text(doc_id: str, credentials_path: str | Path | None = None) -
     else:
         creds = _get_creds()
     if creds is None:
+        _last_error = _last_error or "No credentials (set GOOGLE_ACCESS_TOKEN or GOOGLE_REFRESH_TOKEN in config/.env, or use a service account)."
         return None
     try:
         from googleapiclient.discovery import build
         service = build("docs", "v1", credentials=creds)
         doc = service.documents().get(documentId=doc_id).execute()
     except Exception as e:
-        log.debug("Docs API get_document_text failed: %s", e)
+        _last_error = str(e)
+        log.warning("Docs API get_document_text failed: %s", e)
         return None
     body = doc.get("body")
     if not body:

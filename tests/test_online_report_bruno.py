@@ -9,15 +9,23 @@ Uses:
    https://drive.google.com/drive/folders/12K-YFnnGpvG-Pg03IXvfZeQejhXMkOIn
 
 Requires: .env with GEMINI_API_KEY and Google OAuth (or service account) for Docs/Drive.
-Run from project root: pytest tests/test_online_report_bruno.py -v
+
+Run from project root:
+  pytest tests/test_online_report_bruno.py -v
+  pytest tests/test_online_report_bruno.py -v -s                    # ver prints y logs en terminal
+  pytest tests/test_online_report_bruno.py -v -s --log-cli-level=INFO  # ver todos los logs
 """
 import json
+import logging
 import os
 import re
 import sys
 from pathlib import Path
 
 import pytest
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s [%(name)s] %(message)s")
+log = logging.getLogger(__name__)
 
 # Project root and src on path
 ROOT = Path(__file__).resolve().parent.parent
@@ -179,9 +187,11 @@ def test_online_generation_bruno(
         scorecard_content,
         candidate_name=name,
         position=position,
+        include_dimensions=True,
     )
     score = result.get("score", -1)
     reasoning = result.get("reasoning", "")
+    dimensions_table = (result.get("dimensions_table") or "").strip()
 
     assert score >= 0 and score <= 10, f"Invalid score: {score}"
     assert reasoning, "Missing reasoning"
@@ -189,10 +199,10 @@ def test_online_generation_bruno(
     # Generate report using the same logic as the agent (save + upload to Drive)
     sys.path.insert(0, str(ROOT / "src"))
     os.chdir(ROOT)
-    # Use agent's generate_candidate_report so upload uses same config
+    log.info("ROOT=%s REPORTS_DIR=%s cwd=%s", ROOT.resolve(), REPORTS_DIR.resolve(), os.getcwd())
+
     from calibrator_agent.agent import generate_candidate_report
 
-    dimensions_table = ""  # optional for this test
     out = generate_candidate_report(
         candidate_email=TEST_EMAIL,
         score=score,
@@ -202,15 +212,28 @@ def test_online_generation_bruno(
         dimensions_breakdown="",
         dimensions_table=dimensions_table,
     )
+    log.info("generate_candidate_report returned: %s", out[:200] if len(out) > 200 else out)
 
-    # Assert local report exists
+    # Assert local report exists (use same path logic as agent: data/reports under project root)
     safe_name = re.sub(r"[^\w.-]", "_", TEST_EMAIL.strip())
-    report_path = REPORTS_DIR / f"{safe_name}_report.md"
+    report_filename = f"{safe_name}_report.md"
+    report_path = (REPORTS_DIR / report_filename).resolve()
+    log.info("Expected report path: %s (exists=%s)", report_path, report_path.exists())
+    if not report_path.exists():
+        try:
+            listing = list(REPORTS_DIR.iterdir()) if REPORTS_DIR.exists() else "dir missing"
+        except Exception as e:
+            listing = str(e)
+        log.info("Listing REPORTS_DIR: %s -> %s", REPORTS_DIR.resolve(), listing)
     assert report_path.exists(), f"Report not saved locally: {report_path}"
     content = report_path.read_text(encoding="utf-8")
     assert "Overall Score" in content or "Score" in content
     assert str(score) in content
     assert reasoning[:100] in content or reasoning[:50] in content
+    # When dimensions were returned, report should include the table and total
+    if dimensions_table:
+        assert "Tabla de puntuación por dimensión" in content or "Dimensión" in content
+        assert "Total" in content or "/10" in content
 
     # Assert Drive folder ID used is the configured one
     assert reports_folder_id == DEFAULT_REPORTS_FOLDER_ID or reports_folder_id, (
@@ -218,3 +241,5 @@ def test_online_generation_bruno(
     )
     # If upload was attempted, message should mention Drive or report path
     assert "Report saved" in out or "Uploaded" in out or "report" in out.lower()
+
+    log.info("Report file location: %s", report_path)

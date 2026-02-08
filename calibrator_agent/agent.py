@@ -4,17 +4,20 @@ Tools: get_candidate_by_email, get_transcript_online, get_scorecard_online (onli
 Run from project root: adk run calibrator_agent  or  adk web
 """
 import json
+import logging
 import os
 import re
 import sys
 from pathlib import Path
 
+log = logging.getLogger(__name__)
+
 from dotenv import load_dotenv
 
-# Load config from project config/
+# Load config: calibrator_agent/.env first, then config/.env so config (tokens, etc.) wins
 _root = Path(__file__).resolve().parent.parent
-load_dotenv(_root / "config" / ".env")
 load_dotenv(_root / "calibrator_agent" / ".env")
+load_dotenv(_root / "config" / ".env", override=True)
 
 # So the tool can import from src
 sys.path.insert(0, str(_root / "src"))
@@ -83,10 +86,11 @@ def get_google_doc_text(doc_id: str) -> str:
     """
     if not (doc_id or "").strip():
         return "[No document ID provided. Use get_transcript_online or get_scorecard_online with the candidate email or scorecard name to load from Drive folder or config.]"
-    from docs_client import get_document_text, get_service_account_email, is_configured
+    from docs_client import get_document_text, get_last_error, get_service_account_email, is_configured
     text = get_document_text(doc_id)
     if text:
         return text
+    api_error = get_last_error()
     if not is_configured():
         return (
             "[Could not fetch doc. Configure access: (1) Service account: add config/service_account.json and share the doc with its client_email. "
@@ -98,10 +102,13 @@ def get_google_doc_text(doc_id: str) -> str:
             f"[Could not fetch doc {doc_id}. Share this document with the service account: {email} "
             "(Compartir → add that email as Viewer/Lector).]"
         )
-    return (
-        "[Could not fetch doc. If using OAuth, ensure GOOGLE_REFRESH_TOKEN is set in config/.env (run python run/oauth_login.py once) "
-        "and you signed in with the Google account that has access to this doc or the Drive folder. See config/README-service-account.md.]"
+    hint = (
+        "[Could not fetch doc. If using OAuth, ensure GOOGLE_REFRESH_TOKEN (or GOOGLE_ACCESS_TOKEN) is set in config/.env and the account has access to the doc. "
+        "See config/README-service-account.md.]"
     )
+    if api_error:
+        return f"[Could not fetch doc. Error: {api_error}.]{hint}"
+    return hint
 
 
 def get_transcript_online(candidate_email: str) -> str:
@@ -191,6 +198,28 @@ def get_scorecard_offline(scorecard_name: str) -> str:
     return f"[No local scorecard found for: {scorecard_name}. Add a .txt or .docx in data/scorecards/.]"
 
 
+def score_candidate_with_dimensions(transcript_text: str, scorecard_text: str, candidate_name: str, position: str) -> str:
+    """
+    Call Gemini to score the candidate and get per-dimension breakdown. Use the full transcript (including any Gemini notes).
+    Returns: SCORE: N\\nREASONING: ...\\nDIMENSIONS_TABLE:\\n<lines> — use these when calling update_candidate_score and generate_candidate_report (pass the DIMENSIONS_TABLE lines as dimensions_table).
+    """
+    from scorer import score_with_gemini
+    result = score_with_gemini(
+        transcript_text, scorecard_text,
+        candidate_name=candidate_name,
+        position=position,
+        include_dimensions=True,
+    )
+    score = result.get("score", 0)
+    reasoning = result.get("reasoning", "")
+    dims = (result.get("dimensions_table") or "").strip()
+    return (
+        f"SCORE: {score}\n"
+        f"REASONING: {reasoning}\n"
+        f"DIMENSIONS_TABLE:\n{dims}"
+    )
+
+
 def update_candidate_score(candidate_email: str, score: int, reasoning: str) -> str:
     """
     Save the candidate's score and reasoning to config/candidates.json.
@@ -255,6 +284,21 @@ def _build_dimensions_table(dimensions_table: str) -> str:
     return "\n".join(lines)
 
 
+def _build_dimensions_table_with_total(dimensions_table: str, overall_score: int) -> str:
+    """Build markdown table from dimensions_table string and append a Total row. If dimensions_table empty, show at least header + Total."""
+    table = _build_dimensions_table(dimensions_table)
+    total_row = f"| **Total** | — | **{overall_score}/10** | Puntuación global |"
+    if not table:
+        # Always show at least header and total so the section is visible
+        return (
+            "| Dimensión | Categoría | Score | Notas |\n"
+            "|-----------|-----------|-------|-------|\n"
+            + total_row
+        )
+    table += f"\n{total_row}"
+    return table
+
+
 def generate_candidate_report(
     candidate_email: str,
     score: int,
@@ -302,14 +346,14 @@ def generate_candidate_report(
         "---",
         "",
     ]
-    table_md = _build_dimensions_table(dimensions_table)
-    if table_md:
-        report_lines.extend([
-            "## Tabla de puntuación por dimensión",
-            "",
-            table_md,
-            "",
-        ])
+    overall_score = max(0, min(10, int(score)))
+    table_md = _build_dimensions_table_with_total(dimensions_table, overall_score)
+    report_lines.extend([
+        "## Tabla de puntuación por dimensión",
+        "",
+        table_md,
+        "",
+    ])
     report_lines.extend([
         "---",
         "",
@@ -329,15 +373,28 @@ def generate_candidate_report(
         "",
     ])
     report_text = "\n".join(report_lines)
-    reports_dir = _root / "data" / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    safe_name = re.sub(r"[^\w.-]", "_", (candidate_email or "candidate").strip())
-    report_filename = f"{safe_name}_report.md"
-    report_path = reports_dir / report_filename
+    # Use project root where config lives so report is always in the same place (data/reports/)
+    config_marker = _root / "config" / "candidates.json"
+    if config_marker.exists():
+        project_root = _root
+    else:
+        project_root = Path(os.getcwd())
+        for _ in range(5):
+            if (project_root / "config" / "candidates.json").exists():
+                break
+            project_root = project_root.parent
+    reports_dir = (project_root / "data" / "reports").resolve()
+    report_filename = re.sub(r"[^\w.-]", "_", (candidate_email or "candidate").strip()) + "_report.md"
+    report_path = (reports_dir / report_filename).resolve()
+    log.info("Report target: project_root=%s reports_dir=%s report_path=%s", project_root, reports_dir, report_path)
     try:
+        reports_dir.mkdir(parents=True, exist_ok=True)
         report_path.write_text(report_text, encoding="utf-8")
         msg = f"Report saved to {report_path}."
+        log.info("Report written: %s (exists=%s)", report_path, report_path.exists())
+        print(f"[Report] Written to: {report_path}", flush=True)
     except Exception as e:
+        log.exception("Failed to write report to %s: %s", report_path, e)
         return f"[Error writing report: {e}]"
     # Upload to Google Drive: folder ID from env, or config/drive_reports.json (fallback: read from _root)
     folder_id = (os.environ.get("GOOGLE_DRIVE_REPORTS_FOLDER_ID") or "").strip()
@@ -354,18 +411,26 @@ def generate_candidate_report(
         except Exception:
             pass
     if folder_id:
+        log.info("Uploading report to Drive folder_id=%s filename=%s", folder_id, report_filename)
         try:
+            import sys
             from docs_client import upload_file_to_drive
             drive_id = upload_file_to_drive(folder_id, report_filename, report_text, mime_type="text/markdown")
             if drive_id:
+                log.info("Drive upload success: file_id=%s", drive_id)
                 msg += f" Uploaded to Google Drive: {report_filename} (folder {folder_id})"
             else:
-                msg += (
-                    " (Drive upload failed: comprueba que GOOGLE_REFRESH_TOKEN tenga scope drive.file "
-                    "— ejecuta de nuevo python run/oauth_login.py y actualiza el token en config/.env; "
-                    "y que la cuenta tenga permiso de edición en la carpeta de Drive.)"
+                hint = (
+                    " (Drive upload failed: run 'python run/oauth_login.py' to get a fresh token with drive.file scope "
+                    "(saved as GOOGLE_ACCESS_TOKEN in config/.env, or use GOOGLE_REFRESH_TOKEN). "
+                    "Ensure the Google account has edit permission on the Drive folder.)"
                 )
+                log.error("Drive upload returned None (no credentials?). %s", hint)
+                print("[Drive] Upload failed (no credentials?). Check config/.env and logs above.", file=sys.stderr)
+                msg += hint
         except Exception as e:
+            log.exception("Drive upload failed: %s", e)
+            print(f"[Drive] Upload failed: {e}", file=sys.stderr)
             msg += f" (Drive upload failed: {e})"
     msg += " You can share it or use the Feedback section to send to the candidate if discarded."
     return msg
@@ -386,15 +451,13 @@ You are an expert interviewer. You score candidates (0-10) based on their transc
 4. **If ONLINE:** Use get_transcript_online(candidate_email) and get_scorecard_online(scorecard_name) to load transcript and scorecard. These try Docs API, then the Drive folder (transcripts/ and scorecards-templates/), then local files — so OAuth or service account with GOOGLE_DRIVE_FOLDER_ID works. (scorecard_name from get_candidate_by_email, e.g. backend-engineer.)
 5. **If OFFLINE:** Use get_transcript_offline(candidate_email) and get_scorecard_offline(scorecard_name) to load only from local data/transcripts/ and data/scorecards/.
 
-6. With the transcript and scorecard text, evaluate the candidate and reply in this exact format:
-SCORE: <integer 0-10>
-REASONING: <2-4 sentences explaining the score>
+6. **Call score_candidate_with_dimensions(transcript_text, scorecard_text, candidate_name, position)** to get SCORE, REASONING, and DIMENSIONS_TABLE from Gemini. The transcript includes interview content and any "notas de Gemini" — it is used in full. Do not re-evaluate manually; use this tool's output.
 
-7. **Call update_candidate_score(candidate_email, score, reasoning)** so the score is saved to config/candidates.json.
+7. **Call update_candidate_score(candidate_email, score, reasoning)** with the SCORE and REASONING from the tool.
 
-8. **Call generate_candidate_report(candidate_email, score, reasoning, final_recommendation, feedback_if_discarded, dimensions_breakdown, dimensions_table)** to build a detailed report. You must: (a) choose exactly one final_recommendation: "Strong Hire", "Hire", "Mixed / Needs Calibration", or "No Hire"; (b) if No Hire or Mixed, provide feedback_if_discarded; (c) **fill dimensions_table**: one line per dimension, format "Dimension name | Category | Score | Notes". Category = Cultural, Skills, or Technical (from the scorecard). Example: "Execution under Austerity | Cultural | 4/5 | Described constraints.\\nAdaptabilidad y Cambio | Cultural | 4/5 | ...\\nCapacidad de Aprendizaje Técnico | Skills | 4/5 | ...\\nJavaScript | Technical | 4/5 | ..." The report shows "Tabla de puntuación por dimensión" with columns Dimensión | Categoría | Score | Notas.
+8. **Call generate_candidate_report(candidate_email, score, reasoning, final_recommendation, feedback_if_discarded, dimensions_breakdown, dimensions_table)** to build the report. (a) Use the **DIMENSIONS_TABLE** from score_candidate_with_dimensions as dimensions_table (the full multi-line block after "DIMENSIONS_TABLE:"). (b) Choose exactly one final_recommendation: "Strong Hire", "Hire", "Mixed / Needs Calibration", or "No Hire". (c) If No Hire or Mixed, provide feedback_if_discarded. The report will show "Tabla de puntuación por dimensión" with Dimensión | Categoría | Score | Notas and a Total row.
 
 If any tool returns an error message in [brackets], tell the user clearly and suggest the fix.
 """,
-    tools=[get_candidate_by_email, get_transcript_online, get_scorecard_online, get_google_doc_text, get_transcript_offline, get_scorecard_offline, update_candidate_score, generate_candidate_report],
+    tools=[get_candidate_by_email, get_transcript_online, get_scorecard_online, get_google_doc_text, get_transcript_offline, get_scorecard_offline, score_candidate_with_dimensions, update_candidate_score, generate_candidate_report],
 )
