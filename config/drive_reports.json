@@ -1,4 +1,6 @@
 {
   "reports_folder_id": "1aVZSJoRt-Dd9cS4n468ghv50lwgCG7zw",
-  "_comment": "Default Google Drive folder for report output. Override with GOOGLE_DRIVE_REPORTS_FOLDER_ID in .env. Folder URL: https://drive.google.com/drive/folders/12K-YFnnGpvG-Pg03IXvfZeQejhXMkOIn"
+  "linkedin_questions_folder_id": "1DfQjtydLXBndPrdocnzVRpvqogj4v41z",
+  "results_folder_id": "1aVZSJoRt-Dd9cS4n468ghv50lwgCG7zw",
+  "_comment": "reports: report output; linkedin_questions: LinkedIn folder; results_folder_id: Drive folder for Julian form DOCX (paste folder ID from URL)"
 }

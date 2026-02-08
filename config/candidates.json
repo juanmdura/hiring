@@ -7,36 +7,34 @@
       "linkedin": "https://www.linkedin.com/in/bruno-membrado-0a7a1521b/",
       "position": "BACKEND ENGINEER",
       "score": 8,
-      "score_reasoning": "Bruno is a highly motivated and adaptable candidate with exceptional learning ability and a strong cultural fit for a fast-paced startup. While his foundational technical knowledge in some areas is at an expected mid-level, his proactive approach to problem-solving and advanced utilization of AI tools stand out. His enthusiasm for challenges and quick adaptation to new technologies make him a valuable prospect for the company's specific needs."
+      "score_reasoning": "Bruno demonstrates strong cultural alignment with high ownership and adaptability, especially under pressure. His approach to technical learning is proactive and confident. While his foundational understanding of some technical areas like Node.js concurrency and React reconciliation met expectations, his strategic and deep integration of AI code assistants into his daily workflow was outstanding. He is a highly motivated and impactful candidate."
     },
     {
       "name": "Marion Cholieu",
-      "email": "fabriciocendecar@gmail.com",
+      "email": "marioncholieu@gmail.com",
       "transcript": "",
       "linkedin": "https://www.linkedin.com/in/marion-cholieu/",
       "position": "HEAD OF PRODUCT",
       "score": -1,
       "score_reasoning": ""
-    }
-    ,
+    },
     {
-    "name": "Ignacio Alvarez",
-    "email": "ignacioalvarez972@gmail.com",
-    "transcript": "",
-    "linkedin": "https://www.linkedin.com/in/ignacio-alvarez-4b4950186/",
-    "position": "BACKEND ENGINEER",
-    "score": -1,
-    "score_reasoning": ""
-    }
-    ,
+      "name": "Ignacio Alvarez",
+      "email": "ignacioalvarez972@gmail.com",
+      "transcript": "",
+      "linkedin": "https://www.linkedin.com/in/ignacio-alvarez-4b4950186/",
+      "position": "BACKEND ENGINEER",
+      "score": -1,
+      "score_reasoning": ""
+    },
     {
-    "name": "Ronald Fabricio Centeno Cárdenas",
-    "email": "fabriciocendecar@gmail.com",
-    "transcript": "",
-    "linkedin": "https://www.linkedin.com/in/r-fabricio/",
-    "position": "BACKEND ENGINEER",
-    "score": -1,
-    "score_reasoning": ""
-  }
+      "name": "Ronald Fabricio Centeno Cárdenas",
+      "email": "fabriciocendecar@gmail.com",
+      "transcript": "",
+      "linkedin": "https://www.linkedin.com/in/r-fabricio/",
+      "position": "BACKEND ENGINEER",
+      "score": -1,
+      "score_reasoning": ""
+    }
   ]
 }

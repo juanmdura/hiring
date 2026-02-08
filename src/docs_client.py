@@ -225,6 +225,45 @@ def upload_file_to_drive(folder_id: str, filename: str, content: str, mime_type:
         raise
 
 
+def upload_binary_to_drive(
+    folder_id: str,
+    filename: str,
+    content_bytes: bytes,
+    mime_type: str,
+) -> str | None:
+    """
+    Upload a binary file (e.g. DOCX) to a Google Drive folder. Returns the new file id or None on failure.
+    Requires drive.file scope.
+    """
+    import sys
+    creds = _get_creds()
+    if creds is None:
+        log.error("Drive upload skipped: no credentials")
+        print("[Drive] Upload skipped: no credentials (set GOOGLE_ACCESS_TOKEN or GOOGLE_REFRESH_TOKEN in config/.env)", file=sys.stderr)
+        return None
+    try:
+        import io
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaIoBaseUpload
+        drive = build("drive", "v3", credentials=creds)
+        file_metadata = {"name": filename, "parents": [folder_id]}
+        media = MediaIoBaseUpload(
+            io.BytesIO(content_bytes),
+            mimetype=mime_type,
+            resumable=False,
+        )
+        created = drive.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id,webViewLink",
+        ).execute()
+        return created.get("id")
+    except Exception as e:
+        log.exception("Drive upload failed (folder_id=%s): %s", folder_id, e)
+        print(f"[Drive] Upload failed: {e}", file=sys.stderr)
+        raise
+
+
 def get_last_error() -> str | None:
     """Return the last OAuth or Docs API error message, or None."""
     global _last_error

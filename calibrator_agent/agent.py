@@ -1,6 +1,6 @@
 """
-ADK agent: scores candidates by email. Asks if docs are online (Google Docs) or offline (local files).
-Tools: get_candidate_by_email, get_transcript_online, get_scorecard_online (online: Docs API + Drive folder + local), get_google_doc_text (by doc_id), get_transcript_offline, get_scorecard_offline.
+ADK agent: scores candidates by email; generates LinkedIn-based interview questions.
+Tools: get_candidate_by_email, get_transcript_online, get_scorecard_online, get_google_doc_text, get_transcript_offline, get_scorecard_offline, score_candidate_with_dimensions, update_candidate_score, generate_candidate_report, generate_linkedin_interview_questions (linkedin), generate_julian_form (julian).
 Run from project root: adk run calibrator_agent  or  adk web
 """
 import json
@@ -436,10 +436,177 @@ def generate_candidate_report(
     return msg
 
 
+def generate_linkedin_interview_questions(candidate_email: str, profile_text: str, profile_url: str = "") -> str:
+    """
+    Generate personalized interview questions from a candidate's LinkedIn profile and save to Drive.
+    Use this when the user asks for 'linkedin' or 'linkedin questions': first get the candidate email,
+    then ask the user to paste the LinkedIn profile content (copy from the profile page), then call this tool.
+    candidate_email: e.g. brunomembrado10@gmail.com (must exist in config/candidates.json)
+    profile_text: the pasted LinkedIn profile content (experience, about, skills, etc.). Required.
+    profile_url: optional LinkedIn profile URL for reference (e.g. from candidates.json 'linkedin' field).
+    Saves to data/linkedin_questions/ and uploads to the Drive folder configured in config/drive_reports.json (linkedin_questions_folder_id).
+    """
+    if not (profile_text or "").strip():
+        return (
+            "[No profile content. Ask the user to open the candidate's LinkedIn profile, copy the visible text "
+            "(About, Experience, Education, Skills), and paste it here. Then call this tool again with profile_text set.]"
+        )
+    email_lower = (candidate_email or "").strip().lower()
+    if not email_lower:
+        return "[Provide candidate_email (e.g. from get_candidate_by_email).]"
+    path = _root / "config" / "candidates.json"
+    candidate_name = candidate_email
+    position = ""
+    if path.exists():
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            c = next((x for x in data.get("candidates", []) if (x.get("email") or "").strip().lower() == email_lower), None)
+            if c:
+                candidate_name = c.get("name", candidate_email)
+                position = (c.get("position") or "").strip()
+        except Exception:
+            pass
+    try:
+        from linkedin_questions import generate_questions_from_profile
+        questions_md = generate_questions_from_profile(
+            profile_text=profile_text.strip(),
+            candidate_name=candidate_name,
+            position=position,
+        )
+    except Exception as e:
+        log.exception("LinkedIn questions generation failed: %s", e)
+        return f"[Error generating questions: {e}]"
+    if not questions_md:
+        return "[Generated content was empty.]"
+    # Resolve project data dir and save locally
+    config_marker = _root / "config" / "candidates.json"
+    project_root = _root if config_marker.exists() else Path(os.getcwd())
+    for _ in range(5):
+        if (project_root / "config" / "candidates.json").exists():
+            break
+        project_root = project_root.parent
+    out_dir = (project_root / "data" / "linkedin_questions").resolve()
+    safe_email = re.sub(r"[^\w.-]", "_", email_lower)
+    filename = f"{safe_email}_linkedin_questions.md"
+    out_path = (out_dir / filename).resolve()
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(questions_md, encoding="utf-8")
+    except Exception as e:
+        log.exception("Failed to write LinkedIn questions to %s: %s", out_path, e)
+        return f"[Error writing file: {e}]"
+    log.info("LinkedIn questions written: %s", out_path)
+    msg = f"Questions saved to {out_path}."
+    # Upload to Drive: linkedin_questions_folder_id from config or env
+    folder_id = (os.environ.get("GOOGLE_DRIVE_LINKEDIN_QUESTIONS_FOLDER_ID") or "").strip()
+    if not folder_id and (_root / "config" / "drive_reports.json").exists():
+        try:
+            data = json.load((_root / "config" / "drive_reports.json").open(encoding="utf-8"))
+            folder_id = (data.get("linkedin_questions_folder_id") or "").strip()
+        except Exception:
+            pass
+    if folder_id:
+        try:
+            from docs_client import upload_file_to_drive
+            drive_id = upload_file_to_drive(folder_id, filename, questions_md, mime_type="text/markdown")
+            if drive_id:
+                log.info("LinkedIn questions uploaded to Drive: file_id=%s", drive_id)
+                msg += f" Uploaded to Google Drive (folder linkedin): {filename}"
+            else:
+                msg += " (Drive upload failed; check OAuth and folder permission.)"
+        except Exception as e:
+            log.warning("Drive upload failed: %s", e)
+            msg += f" (Drive upload failed: {e})"
+    return msg
+
+
+def generate_julian_form(candidate_email: str, transcript_text: str = "") -> str:
+    """
+    Generate a DOCX evaluation form (Julian form) from the interview transcript and save it to the results folder.
+    Use when the user says 'julian': ask for candidate email, get the transcript (online or offline), then call this tool with the transcript text (or leave empty to load automatically).
+    candidate_email: e.g. brunomembrado10@gmail.com (must exist in config/candidates.json for auto-load).
+    transcript_text: full transcript including Gemini notes. If empty, the tool tries to load from config transcript URL and Drive/local.
+    Saves to data/results/<email>_julian_form.docx with: Overall Impression (1-10), Key strengths, Areas for development, Recommendation, Additional comments.
+    """
+    email_lower = (candidate_email or "").strip().lower()
+    if not email_lower:
+        return "[Provide candidate_email.]"
+    path = _root / "config" / "candidates.json"
+    candidate_name = candidate_email
+    transcript_url = ""
+    if path.exists():
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            c = next((x for x in data.get("candidates", []) if (x.get("email") or "").strip().lower() == email_lower), None)
+            if c:
+                candidate_name = c.get("name", candidate_email)
+                transcript_url = (c.get("transcript") or "").strip()
+        except Exception:
+            pass
+    text = (transcript_text or "").strip()
+    if not text:
+        from content_loader import get_transcript_content, get_transcript_offline
+        text = get_transcript_content(transcript_url, candidate_email)
+        if not text:
+            text = get_transcript_offline(candidate_email)
+        if not text or not text.strip():
+            return (
+                f"[No transcript for {candidate_email}. Load the transcript first (get_transcript_online or get_transcript_offline), "
+                "or ensure the candidate has a transcript URL in config/candidates.json and OAuth/local files are set.]"
+            )
+    config_marker = _root / "config" / "candidates.json"
+    project_root = _root if config_marker.exists() else Path(os.getcwd())
+    for _ in range(5):
+        if (project_root / "config" / "candidates.json").exists():
+            break
+        project_root = project_root.parent
+    results_dir = (project_root / "data" / "results").resolve()
+    safe_email = re.sub(r"[^\w.-]", "_", email_lower)
+    filename = f"{safe_email}_julian_form.docx"
+    out_path = (results_dir / filename).resolve()
+    try:
+        from julian_form import build_julian_docx
+        build_julian_docx(text, candidate_name=candidate_name, output_path=out_path)
+    except Exception as e:
+        log.exception("Julian form generation failed: %s", e)
+        return f"[Error generating Julian form: {e}]"
+    log.info("Julian form written: %s", out_path)
+    msg = f"Julian form saved to {out_path}."
+    # Upload to Drive results folder if configured
+    folder_id = (os.environ.get("GOOGLE_DRIVE_RESULTS_FOLDER_ID") or "").strip()
+    if not folder_id and (_root / "config" / "drive_reports.json").exists():
+        try:
+            data = json.load((_root / "config" / "drive_reports.json").open(encoding="utf-8"))
+            folder_id = (data.get("results_folder_id") or "").strip()
+        except Exception:
+            pass
+    if folder_id:
+        try:
+            from docs_client import upload_binary_to_drive
+            docx_bytes = out_path.read_bytes()
+            drive_id = upload_binary_to_drive(
+                folder_id,
+                filename,
+                docx_bytes,
+                mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+            if drive_id:
+                log.info("Julian form uploaded to Drive: file_id=%s", drive_id)
+                msg += f" Uploaded to Google Drive (results folder): {filename}"
+            else:
+                msg += " (Drive upload failed; check OAuth and folder permission.)"
+        except Exception as e:
+            log.warning("Drive upload failed: %s", e)
+            msg += f" (Drive upload failed: {e})"
+    return msg
+
+
 root_agent = Agent(
     name="calibrator",
     model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-    description="Scores interview candidates. Asks if you use online (Google Docs) or offline (local files), then asks for candidate email.",
+    description="Scores candidates, generates LinkedIn interview questions, and Julian evaluation form (DOCX). Use 'linkedin' for profile-based questions; use 'julian' for the evaluation form from the transcript.",
     instruction="""
 You are an expert interviewer. You score candidates (0-10) based on their transcript and the role scorecard.
 
@@ -458,6 +625,20 @@ You are an expert interviewer. You score candidates (0-10) based on their transc
 8. **Call generate_candidate_report(candidate_email, score, reasoning, final_recommendation, feedback_if_discarded, dimensions_breakdown, dimensions_table)** to build the report. (a) Use the **DIMENSIONS_TABLE** from score_candidate_with_dimensions as dimensions_table (the full multi-line block after "DIMENSIONS_TABLE:"). (b) Choose exactly one final_recommendation: "Strong Hire", "Hire", "Mixed / Needs Calibration", or "No Hire". (c) If No Hire or Mixed, provide feedback_if_discarded. The report will show "Tabla de puntuación por dimensión" with Dimensión | Categoría | Score | Notas and a Total row.
 
 If any tool returns an error message in [brackets], tell the user clearly and suggest the fix.
+
+**LinkedIn flow (command: linkedin):**
+When the user says "linkedin" or "generate linkedin questions" or wants interview questions from a LinkedIn profile:
+1. Ask for the candidate's **email** (or use get_candidate_by_email to list/find them).
+2. Ask the user to **paste the LinkedIn profile content**: they should open the candidate's LinkedIn profile, copy the visible text (About, Experience, Education, Skills), and paste it in the chat.
+3. Call **generate_linkedin_interview_questions(candidate_email, profile_text, profile_url)** with the email and the pasted text. Optionally set profile_url from the candidate's "linkedin" field in config if available.
+4. The tool generates tailored questions with Gemini, saves a .md file locally, and uploads it to the configured Drive folder (linkedin). Tell the user where the file was saved and that it was uploaded to Drive.
+
+**Julian flow (command: julian):**
+When the user says "julian" or wants the Julian evaluation form (DOCX) from the interview:
+1. Ask for the candidate's **email**.
+2. Get the transcript: use get_transcript_online(candidate_email) or get_transcript_offline(candidate_email) depending on the user's mode (online/offline). If the user already provided transcript in context, you can pass it.
+3. Call **generate_julian_form(candidate_email, transcript_text)** with the email and the full transcript text (including any Gemini notes). The tool generates a DOCX in data/results/ and, if configured, uploads it to the Drive "results" folder (set results_folder_id in config/drive_reports.json or GOOGLE_DRIVE_RESULTS_FOLDER_ID in .env).
+4. Tell the user the file was saved locally and, if applicable, uploaded to Drive results.
 """,
-    tools=[get_candidate_by_email, get_transcript_online, get_scorecard_online, get_google_doc_text, get_transcript_offline, get_scorecard_offline, score_candidate_with_dimensions, update_candidate_score, generate_candidate_report],
+    tools=[get_candidate_by_email, get_transcript_online, get_scorecard_online, get_google_doc_text, get_transcript_offline, get_scorecard_offline, score_candidate_with_dimensions, update_candidate_score, generate_candidate_report, generate_linkedin_interview_questions, generate_julian_form],
 )
