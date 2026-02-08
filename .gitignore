@@ -48,5 +48,5 @@ Thumbs.db
 *.db
 calibrator_agent/.adk/
 
-# Optional: uncomment to ignore generated reports (they may contain PII)
-# data/reports/
+# Data (transcripts, scorecards, reports — may contain PII)
+data/
