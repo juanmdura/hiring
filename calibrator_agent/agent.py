@@ -339,16 +339,32 @@ def generate_candidate_report(
         msg = f"Report saved to {report_path}."
     except Exception as e:
         return f"[Error writing report: {e}]"
-    # Upload to Google Drive (Interviews/reports) if folder ID is set
+    # Upload to Google Drive: folder ID from env, or config/drive_reports.json (fallback: read from _root)
     folder_id = (os.environ.get("GOOGLE_DRIVE_REPORTS_FOLDER_ID") or "").strip()
+    if not folder_id:
+        try:
+            from reports_config import get_reports_folder_id
+            folder_id = get_reports_folder_id()
+        except Exception:
+            pass
+    if not folder_id and (_root / "config" / "drive_reports.json").exists():
+        try:
+            data = json.load((_root / "config" / "drive_reports.json").open(encoding="utf-8"))
+            folder_id = (data.get("reports_folder_id") or "").strip()
+        except Exception:
+            pass
     if folder_id:
         try:
             from docs_client import upload_file_to_drive
             drive_id = upload_file_to_drive(folder_id, report_filename, report_text, mime_type="text/markdown")
             if drive_id:
-                msg += f" Uploaded to Google Drive (Interviews/reports): {report_filename}"
+                msg += f" Uploaded to Google Drive: {report_filename} (folder {folder_id})"
             else:
-                msg += " (Drive upload failed; check GOOGLE_DRIVE_REPORTS_FOLDER_ID and OAuth scope drive.file)"
+                msg += (
+                    " (Drive upload failed: comprueba que GOOGLE_REFRESH_TOKEN tenga scope drive.file "
+                    "— ejecuta de nuevo python run/oauth_login.py y actualiza el token en config/.env; "
+                    "y que la cuenta tenga permiso de edición en la carpeta de Drive.)"
+                )
         except Exception as e:
             msg += f" (Drive upload failed: {e})"
     msg += " You can share it or use the Feedback section to send to the candidate if discarded."

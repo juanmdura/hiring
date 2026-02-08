@@ -64,10 +64,11 @@ Si no existen las subcarpetas, se busca en la carpeta raíz (comportamiento ante
 
 ## Guardar reportes en Google Drive (Interviews/reports)
 
-Si en `config/.env` defines **GOOGLE_DRIVE_REPORTS_FOLDER_ID** con el ID de la carpeta donde quieres los reportes (por ejemplo **Interviews/reports**):
+Puedes cambiar la carpeta de destino de dos formas:
 
-1. En Drive crea la estructura que quieras, p. ej. carpeta **Interviews** y dentro una carpeta **reports**.
-2. Abre la carpeta **reports** y copia el ID de la URL: `https://drive.google.com/drive/folders/ESTE_ES_EL_ID`
-3. En `.env`: `GOOGLE_DRIVE_REPORTS_FOLDER_ID=ESTE_ES_EL_ID`
+1. **Por defecto:** en `config/drive_reports.json` está `reports_folder_id`. Ahí va el ID de la carpeta de Drive (por defecto: [esta carpeta](https://drive.google.com/drive/folders/12K-YFnnGpvG-Pg03IXvfZeQejhXMkOIn)). Edita ese archivo si quieres otra carpeta sin tocar `.env`.
+2. **Override:** en `config/.env` define **GOOGLE_DRIVE_REPORTS_FOLDER_ID** y tendrá prioridad sobre `drive_reports.json`.
+
+Para obtener el ID: crea en Drive la carpeta que quieras (p. ej. **Interviews** → **reports**), ábrela y copia el ID de la URL: `https://drive.google.com/drive/folders/ESTE_ES_EL_ID`
 
 Cada vez que el agente genere un reporte, se guardará en `data/reports/` en local y además se subirá un archivo `.md` a esa carpeta de Drive. Para subir a Drive hace falta el scope `drive.file`; si añadiste esto después de obtener el refresh token, vuelve a ejecutar `python run/oauth_login.py` y actualiza `GOOGLE_REFRESH_TOKEN` en `.env`.

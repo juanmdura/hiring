@@ -14,6 +14,15 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = PROJECT_ROOT / "config"
 DEFAULT_CREDENTIALS_PATH = CONFIG_DIR / "service_account.json"
 
+# Load config/.env when this module is imported (e.g. from pytest or agent)
+_env_file = CONFIG_DIR / ".env"
+if _env_file.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_file, override=True)
+    except Exception:
+        pass
+
 SCOPES = [
     "https://www.googleapis.com/auth/documents.readonly",
     "https://www.googleapis.com/auth/drive.readonly",
@@ -63,16 +72,47 @@ def _get_creds():
 
 
 def _get_creds_oauth():
-    """Build credentials from OAuth client_id, client_secret, refresh_token in env."""
+    """Build credentials from OAuth: access token (option 3) or refresh token."""
     client_id = os.getenv("GOOGLE_CLIENT_ID")
     client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        return None
+    access_token = (os.getenv("GOOGLE_ACCESS_TOKEN") or "").strip()
+    expiry_str = (os.getenv("GOOGLE_TOKEN_EXPIRY") or "").strip()
     refresh_token = (os.getenv("GOOGLE_REFRESH_TOKEN") or "").strip()
-    if not client_id or not client_secret or not refresh_token:
+
+    # Option 3: use access token only (no refresh token)
+    if access_token:
+        from datetime import datetime, timezone
+        if expiry_str:
+            try:
+                expiry = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                if expiry <= datetime.now(timezone.utc):
+                    log.debug("GOOGLE_ACCESS_TOKEN expired; run python run/oauth_login.py again")
+                    return None
+            except Exception:
+                pass
+        try:
+            from google.oauth2.credentials import Credentials
+            return Credentials(
+                token=access_token,
+                token_uri="https://oauth2.googleapis.com/token",
+                client_id=client_id,
+                client_secret=client_secret,
+                scopes=SCOPES,
+            )
+        except Exception as e:
+            log.debug("OAuth access token failed: %s", e)
+            return None
+
+    # Refresh token flow
+    if not refresh_token:
         return None
     try:
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
-
         creds = Credentials(
             token=None,
             refresh_token=refresh_token,
@@ -168,7 +208,7 @@ def upload_file_to_drive(folder_id: str, filename: str, content: str, mime_type:
         ).execute()
         return created.get("id")
     except Exception as e:
-        log.debug("Drive upload failed: %s", e)
+        log.warning("Drive upload failed (folder_id=%s): %s", folder_id, e)
         return None
 
 
@@ -208,12 +248,12 @@ def get_document_text(doc_id: str, credentials_path: str | Path | None = None) -
 
 
 def is_configured() -> bool:
-    """Return True if service account or OAuth credentials are available."""
+    """Return True if service account or OAuth (access token or refresh token) is available."""
     if Path(os.getenv("GOOGLE_APPLICATION_CREDENTIALS") or DEFAULT_CREDENTIALS_PATH).exists():
         return True
-    if os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET") and os.getenv("GOOGLE_REFRESH_TOKEN"):
-        return True
-    return False
+    if not os.getenv("GOOGLE_CLIENT_ID") or not os.getenv("GOOGLE_CLIENT_SECRET"):
+        return False
+    return bool((os.getenv("GOOGLE_ACCESS_TOKEN") or "").strip() or (os.getenv("GOOGLE_REFRESH_TOKEN") or "").strip())
 
 
 def get_service_account_email() -> str | None:
